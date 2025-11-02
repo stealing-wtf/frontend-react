@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   File, 
@@ -17,15 +17,19 @@ import {
   Edit3,
   Filter,
   SortAsc,
-  HardDrive
+  HardDrive,
+  Upload,
+  CloudUpload
 } from 'lucide-react';
 import type { FileItem } from '../utils/apiService';
+import { apiService } from '../utils/apiService';
 
 interface FileManagerProps {
   files: FileItem[];
   viewMode: 'grid' | 'list';
   searchQuery: string;
   onFileAction?: (action: string, fileId: string) => void;
+  onFilesUploaded?: () => void;
   className?: string;
 }
 
@@ -34,6 +38,7 @@ const FileManager: React.FC<FileManagerProps> = ({
   viewMode,
   searchQuery,
   onFileAction,
+  onFilesUploaded,
   className = ''
 }) => {
   console.log('📂 FileManager received files:', files, 'Length:', files?.length || 0);
@@ -43,6 +48,93 @@ const FileManager: React.FC<FileManagerProps> = ({
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [filterType, setFilterType] = useState<'all' | 'images' | 'documents' | 'videos' | 'audio'>('all');
   const [showContextMenu, setShowContextMenu] = useState<{ x: number; y: number; fileId: string } | null>(null);
+  
+  // Drag and drop states
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({});
+
+  // Drag and drop handlers
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Only set drag over to false if we're leaving the main container
+    if (e.currentTarget === e.target) {
+      setIsDragOver(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+
+    const droppedFiles = Array.from(e.dataTransfer.files);
+    if (droppedFiles.length === 0) return;
+
+    setIsUploading(true);
+    
+    try {
+      // Upload files one by one with progress tracking
+      for (const file of droppedFiles) {
+        const fileId = `${file.name}-${Date.now()}`;
+        setUploadProgress(prev => ({ ...prev, [fileId]: 0 }));
+        
+        try {
+          // Simulate progress updates
+          const progressInterval = setInterval(() => {
+            setUploadProgress(prev => ({
+              ...prev,
+              [fileId]: Math.min((prev[fileId] || 0) + Math.random() * 20, 90)
+            }));
+          }, 200);
+
+          await apiService.uploadFile(file);
+          
+          clearInterval(progressInterval);
+          setUploadProgress(prev => ({ ...prev, [fileId]: 100 }));
+          
+          // Remove progress after a short delay
+          setTimeout(() => {
+            setUploadProgress(prev => {
+              const newProgress = { ...prev };
+              delete newProgress[fileId];
+              return newProgress;
+            });
+          }, 1000);
+          
+        } catch (error) {
+          console.error(`Failed to upload ${file.name}:`, error);
+          setUploadProgress(prev => {
+            const newProgress = { ...prev };
+            delete newProgress[fileId];
+            return newProgress;
+          });
+        }
+      }
+      
+      // Refresh file list after all uploads
+      if (onFilesUploaded) {
+        onFilesUploaded();
+      }
+      
+    } catch (error) {
+      console.error('Upload failed:', error);
+    } finally {
+      setIsUploading(false);
+    }
+  }, [onFilesUploaded]);
 
   const getFileIcon = (file: FileItem) => {
     if (file.type.startsWith('image/')) return Image;
@@ -185,8 +277,8 @@ const FileManager: React.FC<FileManagerProps> = ({
   };
 
   const handleDoubleClick = (file: FileItem) => {
-    // Open preview for image files on double-click
-    if (file.type.startsWith('image/') && onFileAction) {
+    // Open preview for image and video files on double-click
+    if ((file.type.startsWith('image/') || file.type.startsWith('video/')) && onFileAction) {
       onFileAction('preview', file.id);
     }
   };
@@ -209,7 +301,73 @@ const FileManager: React.FC<FileManagerProps> = ({
   };
 
   return (
-    <div className={`relative ${className}`}>
+    <div 
+      className={`relative ${className}`}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {/* Drag and Drop Overlay */}
+      <AnimatePresence>
+        {isDragOver && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-50 bg-accent/20 backdrop-blur-sm border-2 border-dashed border-accent rounded-xl flex items-center justify-center"
+          >
+            <div className="text-center">
+              <motion.div
+                initial={{ scale: 0.8 }}
+                animate={{ scale: 1 }}
+                className="w-20 h-20 bg-accent/30 rounded-full flex items-center justify-center mx-auto mb-4"
+              >
+                <CloudUpload className="w-10 h-10 text-accent" />
+              </motion.div>
+              <h3 className="text-2xl font-bold text-white mb-2">Drop files here</h3>
+              <p className="text-white/70">Release to upload your files</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Upload Progress Overlay */}
+      <AnimatePresence>
+        {isUploading && Object.keys(uploadProgress).length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="absolute top-4 right-4 z-40 bg-card/90 backdrop-blur-xl border border-white/20 rounded-xl p-4 min-w-[300px]"
+          >
+            <h4 className="text-white font-semibold mb-3 flex items-center">
+              <Upload className="w-4 h-4 mr-2" />
+              Uploading files...
+            </h4>
+            <div className="space-y-2">
+              {Object.entries(uploadProgress).map(([fileId, progress]) => {
+                const fileName = fileId.split('-')[0];
+                return (
+                  <div key={fileId} className="space-y-1">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-white/80 truncate">{fileName}</span>
+                      <span className="text-white/60">{Math.round(progress)}%</span>
+                    </div>
+                    <div className="w-full bg-white/10 rounded-full h-2">
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${progress}%` }}
+                        className="bg-gradient-to-r from-accent to-secondary h-2 rounded-full"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Toolbar */}
       <div className="flex items-center justify-between mb-6 p-4 bg-white/5 rounded-xl border border-white/10">
         <div className="flex items-center space-x-4">

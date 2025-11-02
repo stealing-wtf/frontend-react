@@ -613,6 +613,7 @@ const Dashboard: React.FC = () => {
                   viewMode={viewMode}
                   searchQuery={searchQuery}
                   onFileAction={handleFileAction}
+                  onFilesUploaded={loadDashboardData}
                 />
               </motion.div>
             )}
